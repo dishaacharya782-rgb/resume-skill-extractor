@@ -2,6 +2,15 @@
 # SKILL EXTRACTOR
 # ==========================================
 
+import json
+import os
+
+from google import genai
+from google.genai import types
+from dotenv import load_dotenv
+
+load_dotenv()
+
 
 # List of skills that the application can detect
 
@@ -198,31 +207,78 @@ SKILL_CATEGORIES = {
 # FUNCTION TO EXTRACT SKILLS
 # ==========================================
 
-import re
+SUPPORTED_SKILLS = list(dict.fromkeys(
+    skill
+    for category_skills in SKILL_CATEGORIES.values()
+    for skill in category_skills
+))
+
+
+def _canonicalize_skills(skills):
+
+    canonical_skills = {
+        skill.lower(): skill
+        for skill in SUPPORTED_SKILLS
+    }
+
+    return list(dict.fromkeys(
+        canonical_skills[skill.strip().lower()]
+        for skill in skills
+        if isinstance(skill, str)
+        and skill.strip().lower() in canonical_skills
+    ))
 
 
 def extract_skills(text):
 
     """
-    Extract skills from resume text.
+    Extract skills semantically with Gemini and normalize them to the app catalog.
     """
 
-    found_skills = []
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY is not configured. Set it before extracting skills."
+        )
 
-    text_lower = text.lower()
+    client = genai.Client(api_key=api_key)
+    prompt = f"""
+Identify the technical skills represented in the text below, including skills
+described by equivalent wording rather than only exact mentions.
 
-    for skill in SKILLS:
+Return only skills from this canonical catalog, using the exact spelling shown:
+{", ".join(SUPPORTED_SKILLS)}
 
-        skill_lower = skill.lower()
+Text:
+{text}
+"""
 
-        # Check for the complete skill
-        pattern = r"(?<!\w)" + re.escape(skill_lower) + r"(?!\w)"
+    try:
+        response = client.models.generate_content(
+            model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema={
+                    "type": "OBJECT",
+                    "properties": {
+                        "skills": {
+                            "type": "ARRAY",
+                            "items": {"type": "STRING"},
+                        }
+                    },
+                    "required": ["skills"],
+                },
+            ),
+        )
+    except Exception as error:
+        raise RuntimeError("Gemini skill extraction failed.") from error
 
-        if re.search(pattern, text_lower):
-
-            found_skills.append(skill)
-
-    return found_skills
+    try:
+        result = json.loads(response.text)
+        return _canonicalize_skills(result.get("skills", []))
+    except (TypeError, ValueError, AttributeError) as error:
+        raise RuntimeError("Gemini returned an invalid skill response.") from error
 
 
 

@@ -227,19 +227,27 @@ async def upload_resume(
             detail="Could not extract text from the resume."
         )
 
-    # Extract skills from resume
-    skills = extract_skills(
-        resume_text
-    )
+    # Extract skills semantically with Gemini
+    try:
+
+        skills = extract_skills(
+            resume_text
+        )
+
+        job_skills = extract_skills(
+            job_description
+        )
+
+    except RuntimeError as error:
+
+        raise HTTPException(
+            status_code=503,
+            detail=str(error)
+        )
 
     # Categorize extracted skills
     categorized_skills = categorize_skills(
         skills
-    )
-
-    # Extract skills from Job Description
-    job_skills = extract_skills(
-        job_description
     )
 
     # Calculate skill match
