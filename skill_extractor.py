@@ -55,6 +55,7 @@ SKILLS = [
     # -------------------------------
 
     "SQL",
+    "SQLC",
     "MySQL",
     "PostgreSQL",
     "MongoDB",
@@ -148,6 +149,7 @@ SKILL_CATEGORIES = {
 
     "Databases": [
         "SQL",
+        "SQLC",
         "MySQL",
         "Supabase",
         "PostgreSQL",
@@ -213,6 +215,15 @@ SUPPORTED_SKILLS = list(dict.fromkeys(
     for skill in category_skills
 ))
 
+SKILL_ALIASES = {
+    "pyton": "Python",
+    "pythone": "Python",
+    "python 3": "Python",
+    "golang": "Go",
+    "go lang": "Go",
+    "sqlc": "SQLC",
+}
+
 
 def _canonicalize_skills(skills):
 
@@ -220,6 +231,9 @@ def _canonicalize_skills(skills):
         skill.lower(): skill
         for skill in SUPPORTED_SKILLS
     }
+    canonical_skills.update(
+        {alias: skill for alias, skill in SKILL_ALIASES.items()}
+    )
 
     return list(dict.fromkeys(
         canonical_skills[skill.strip().lower()]
@@ -249,30 +263,48 @@ described by equivalent wording rather than only exact mentions.
 Return only skills from this canonical catalog, using the exact spelling shown:
 {", ".join(SUPPORTED_SKILLS)}
 
+Normalize common variants and typos, for example: "pyton" or "pythone" to
+"Python", "golang" to "Go", and "sqlc" to "SQLC".
+
 Text:
 {text}
 """
 
-    try:
-        response = client.models.generate_content(
-            model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema={
-                    "type": "OBJECT",
-                    "properties": {
-                        "skills": {
-                            "type": "ARRAY",
-                            "items": {"type": "STRING"},
-                        }
-                    },
-                    "required": ["skills"],
-                },
-            ),
-        )
-    except Exception as error:
-        raise RuntimeError("Gemini skill extraction failed.") from error
+    request_config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema={
+            "type": "OBJECT",
+            "properties": {
+                "skills": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING"},
+                }
+            },
+            "required": ["skills"],
+        },
+    )
+
+    configured_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    models_to_try = list(dict.fromkeys([
+        configured_model,
+        os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash"),
+    ]))
+
+    response = None
+    last_error = None
+    for model in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=request_config,
+            )
+            break
+        except Exception as error:
+            last_error = error
+
+    if response is None:
+        raise RuntimeError("Gemini skill extraction failed.") from last_error
 
     try:
         result = json.loads(response.text)
